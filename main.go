@@ -1,6 +1,9 @@
 package main
 
-import "./types"
+import (
+	"./types"
+	"log"
+)
 import "fmt"
 
 const CLUSTER_SIZE = types.CLUSTER_SIZE
@@ -17,7 +20,7 @@ func main() {
 func init_cluster() {
 	var com_chans [CLUSTER_SIZE]chan types.Message
 
-	// Set up communication channels
+	// Create communication channels for cluster
 	for i:=0; i<CLUSTER_SIZE; i++ {
 		com_chans[i] = make(chan types.Message)
 		go start_server(i, &com_chans)
@@ -32,27 +35,49 @@ func start_server(id int, com_chans *[CLUSTER_SIZE]chan types.Message) {
     server_state := types.ServerState{
         id, // Server ID
         log, // Empty message log
-        time} // Vector time initialized to 0
+        time, // Vector time initialized to 0
+    }
 
 	// TODO: send messages (broadcast) and update vector time
 	go receive_messages(&server_state, com_chans)
 }
 
+// message handler for given server
 func receive_messages(server_state *types.ServerState, com_chans *[CLUSTER_SIZE]chan types.Message) {
 	select {
 	case message := <-com_chans[server_state.Id]:
 		if message.Type == types.RegularM {
-            // TODO: out of order messages
+			ourTime := server_state.LocalTime[message.Sender]
+			messageTime := message.Timestamp
+			expectedMessageTime := ourTime + 1
 
-            // Update local time
-            server_state.LocalTime[message.Sender] = message.Timestamp[message.Sender]
+			if messageTime > expectedMessageTime {
+				resendMessage := types.Message{
+					types.ResendM,
+					"",
+					server_state.Id,
+					expectedMessageTime,
+				}
+				com_chans[server_state.Id] <- resendMessage
+			} else if messageTime == expectedMessageTime { // message as expected, update local time and save to log
+				server_state.LocalTime[message.Sender] = message.Timestamp
+				server_state.MessageLog = append(server_state.MessageLog, message.Message)
+				fmt.Println("Server ", server_state.Id, "received message: \n", message.Message, "\n")
+			} //ignore broadcasts messages for resends
 
-            // Print message for now
-            // TODO: what are we gonna do with messages?
-            fmt.Println("Server ", server_state.Id, "received message: ")
-            fmt.Println(message.Message, "\n")
 		} else if message.Type == types.ResendM {
-            // TODO: look into log and find message with correct timestamp (if it exists)
-		}   
+			if message.Timestamp < 0 || message.Timestamp >= len(server_state.MessageLog) {
+				log.Fatal("Invalid timestamp requested:", message.Timestamp)
+				return
+			}
+
+			requestedMessage := types.Message{
+				types.RegularM,
+				server_state.MessageLog[message.Timestamp],
+				server_state.Id,
+				message.Timestamp,
+			}
+			com_chans[message.Sender] <- requestedMessage
+		}
 	}
 }

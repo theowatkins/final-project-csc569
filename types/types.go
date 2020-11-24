@@ -21,7 +21,7 @@ type Message struct {
 
 	// REGULAR: Timestamp of the text associated with the message
 	// RESEND: Timestamp of the message being requested
-	Timestamp [CLUSTER_SIZE]int
+	Timestamp int
 }
 
 
