@@ -26,9 +26,11 @@ type Message struct {
 
 
 type ServerState struct {
-	Id int
-	MessageLog []string
+	Id        int
+	LocalLog  * []string
+	GlobalLog * []string
 	LocalTime [CLUSTER_SIZE]int
+
 }
 
 type ClientMessageRequest struct {
