@@ -2,12 +2,15 @@ package main
 
 import (
 	"../final/types"
+	"../final/helper"
 	"log"
 	"math/rand"
+	"os"
 	"time"
-	"../final/helper"
+	"fmt"
+
 )
-import "fmt"
+
 
 const ServerFlag = "**"
 const CLUSTER_SIZE = types.CLUSTER_SIZE
@@ -20,13 +23,15 @@ type ClientChannels = [CLUSTER_SIZE] ClientChannel
 //  - How are we going to do client communication? (who's sending messages)
 //  - What do we do with a message when it's processed?
 var running bool
-
+var logger * log.Logger
 
 func main() {
+	logger = log.New(os.Stdout, "", 0)
+
     clientChannels := init_cluster()
 	running = true
     for running {
-    	fmt.Println("Welcome to message sender.")
+		logger.Println("Welcome to message sender.")
 		senderId := helper.ReadInt("Send Id:")
 		receiverId := helper.ReadInt("Receiver Id:")
 		numberOfMessage := helper.ReadInt("Number of messages: ")
@@ -97,6 +102,7 @@ func send_message_handler(server_state *types.ServerState, com_chans *ClusterCha
 		case request := <-*clientChannel:
 			messages := make([]types.Message, 0)
 			for _, messageBody := range request.MessageBodies {
+				server_state.LocalTime[server_state.Id]++
 				message := types.Message {
 					types.RegularM,
 					messageBody,
@@ -104,7 +110,6 @@ func send_message_handler(server_state *types.ServerState, com_chans *ClusterCha
 					server_state.LocalTime[server_state.Id],
 				}
 				messages = append(messages, message)
-				server_state.LocalTime[server_state.Id]++
 				server_state.MessageLog = append(server_state.MessageLog, message.Body)
 			}
 
@@ -123,13 +128,12 @@ func receive_messages(server_state *types.ServerState, com_chans *ClusterChannel
 	for {
 		select {
 		case message := <-com_chans[server_state.Id]:
-			fmt.Println(ServerFlag, "Server ", server_state.Id, "received message: ", message)
+			logger.Println(ServerFlag, "Server ", server_state.Id, "received message: ", message)
 
 			if message.Type == types.RegularM {
 				expectedMessageTime := server_state.LocalTime[message.Sender] + 1
 				messageTime := message.Timestamp
 				if messageTime > expectedMessageTime {
-					fmt.Println(ServerFlag, "Server ", server_state.Id, " expected: ", expectedMessageTime, "got: ", messageTime)
 					resendMessage := types.Message{
 						types.ResendM,
 						"",
@@ -139,26 +143,30 @@ func receive_messages(server_state *types.ServerState, com_chans *ClusterChannel
 					com_chans[message.Sender] <- resendMessage
 					for messageTime != expectedMessageTime {
 						newMessage := <- com_chans[server_state.Id]
+						logger.Println(ServerFlag, "Server ", server_state.Id, "received message: ", newMessage)
 						if message.Sender == newMessage.Sender &&
 							expectedMessageTime == newMessage.Timestamp {
-							messageTime = newMessage.Timestamp // exit is all caught up
+							expectedMessageTime = newMessage.Timestamp + 1 // exit is all caught up
+							server_state.LocalTime[message.Sender] = newMessage.Timestamp
+							logger.Println(ServerFlag, "Server ", server_state.Id, " fixed ", newMessage)
 						}
 					}
+					server_state.LocalTime[message.Sender] = message.Timestamp
+
 				} else if messageTime == expectedMessageTime { // message as expected, update local time and save to log
 					server_state.LocalTime[message.Sender] = message.Timestamp
 				} //ignore broadcasts messages for resends
 
 			} else if message.Type == types.ResendM {
-				fmt.Println(ServerFlag, "Server ", server_state.Id, "received resend request.")
 				if message.Timestamp < 0 || message.Timestamp >= len(server_state.MessageLog) {
 					log.Fatal("Invalid timestamp requested:", message.Timestamp)
 				}
-
+				messageTime := message.Timestamp
 				requestedMessage := types.Message {
 					types.RegularM,
-					server_state.MessageLog[message.Timestamp],
+					server_state.MessageLog[messageTime],
 					server_state.Id,
-					message.Timestamp,
+					messageTime,
 				}
 				com_chans[message.Sender] <- requestedMessage
 			}
