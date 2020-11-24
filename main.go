@@ -142,11 +142,11 @@ func clusterMessagesHandler(serverState *types.ServerState, clusterChannels *Clu
 	go processMessageQueue(serverState, clusterChannels, &messageQueue)
 }
 
-func processMessageQueue(serverState *types.ServerState, clusterChannels *ClusterChannels, queue *[]types.Message) {
+func processMessageQueue(serverState *types.ServerState, clusterChannels *ClusterChannels, messageQueue *[]types.Message) {
 
 	for {
-		if len(*queue) > 0 {
-			message := (*queue)[0]
+		if len(*messageQueue) > 0 {
+			message := (*messageQueue)[0]
 			if message.Type == types.RegularM {
 				expectedMessageTime := serverState.LocalTime[message.Sender] + 1
 
@@ -161,7 +161,7 @@ func processMessageQueue(serverState *types.ServerState, clusterChannels *Cluste
 						Timestamp: expectedMessageTime,
 					}
 					clusterChannels[message.Sender] <- resendMessage
-					*queue = append(*queue, message) //queue to process when our clock is caught up.
+					*messageQueue = append(*messageQueue, message) //messageQueue to process when our clock is caught up.
 
 					logger.Println(ServerFlag, serverState.Id, "requested", resendMessage)
 				}
@@ -179,7 +179,7 @@ func processMessageQueue(serverState *types.ServerState, clusterChannels *Cluste
 				clusterChannels[message.Sender] <- requestedMessage
 				logger.Println(ServerFlag, serverState.Id, "resent", requestedMessage)
 			}
-			*queue = (*queue)[1:]
+			*messageQueue = (*messageQueue)[1:]
 		}
 		time.Sleep(time.Millisecond * 100)
 	}
