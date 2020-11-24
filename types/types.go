@@ -13,7 +13,7 @@ type Message struct {
 
 	// REGULAR: Text being sent
 	// RESEND: Empty if the message is requesting a resend
-	Message string
+	Body string
 
 	// REGULAR: Whoever is sending the message
 	// RESEND: Whoever is sending the resend request
@@ -29,4 +29,10 @@ type ServerState struct {
 	Id int
 	MessageLog []string
 	LocalTime [CLUSTER_SIZE]int
+}
+
+type ClientMessageRequest struct {
+	ReceiverId int
+	MessageBodies []string
+	OutOfOrder bool
 }
