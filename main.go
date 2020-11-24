@@ -1,16 +1,14 @@
 package main
 
 import (
-	"../final/types"
 	"../final/helper"
+	"../final/types"
+	"fmt"
 	"log"
 	"math/rand"
 	"os"
 	"time"
-	"fmt"
-
 )
-
 
 const ServerFlag = "**"
 const CLUSTER_SIZE = types.CLUSTER_SIZE
@@ -18,19 +16,20 @@ const CLUSTER_SIZE = types.CLUSTER_SIZE
 type MessageChannel = chan types.Message
 type ClusterChannels = [CLUSTER_SIZE]MessageChannel
 type ClientChannel = chan types.ClientMessageRequest
-type ClientChannels = [CLUSTER_SIZE] ClientChannel
+type ClientChannels = [CLUSTER_SIZE]ClientChannel
+
 // early todos:
 //  - How are we going to do client communication? (who's sending messages)
 //  - What do we do with a message when it's processed?
 var running bool
-var logger * log.Logger
+var logger *log.Logger
 
 func main() {
 	logger = log.New(os.Stdout, "", 0)
 
-    clientChannels := init_cluster()
+	clientChannels := initCluster()
 	running = true
-    for running {
+	for running {
 		logger.Println("Welcome to message sender.")
 		senderId := helper.ReadInt("Send Id:")
 		receiverId := helper.ReadInt("Receiver Id:")
@@ -51,7 +50,7 @@ func main() {
 	}
 }
 
-func broadcastMessage(senderId int, channels * ClusterChannels, message types.Message){
+func broadcastMessage(senderId int, channels *ClusterChannels, message types.Message) {
 	for channelIndex, channel := range channels {
 		if channelIndex != senderId {
 			channel <- message
@@ -59,117 +58,129 @@ func broadcastMessage(senderId int, channels * ClusterChannels, message types.Me
 	}
 }
 
-func shuffle_message(messages []types.Message){
+func shuffleMessage(messages []types.Message) {
 	rand.Seed(time.Now().UnixNano())
 	rand.Shuffle(len(messages), func(i, j int) { messages[i], messages[j] = messages[j], messages[i] })
 }
 
-func init_cluster() ClientChannels {
+func initCluster() ClientChannels {
 	var clusterChannels ClusterChannels
 	var clientChannels ClientChannels
 
 	// Create communication channels for cluster
-	for i:=0; i<CLUSTER_SIZE; i++ {
+	for i := 0; i < CLUSTER_SIZE; i++ {
 		clusterChannels[i] = make(MessageChannel)
 		clientChannels[i] = make(ClientChannel)
-		go start_server(i, &clusterChannels, &clientChannels[i])
+		go startServer(i, &clusterChannels, &clientChannels[i])
 	}
 	return clientChannels
 }
 
-func start_server(id int, clusterChannels *ClusterChannels, clientChannels *ClientChannel) {
-    var serverTime [CLUSTER_SIZE]int
-    serverLog := make([]string, 0)
+func startServer(id int, clusterChannels *ClusterChannels, clientChannels *ClientChannel) {
+	var serverTime [CLUSTER_SIZE]int
+	serverLog := make([]string, 0)
+	globalLog := make([]string, 0)
 
-    for i := 0 ;i<len(serverTime); i++ {
-    	serverTime[i] = -1 // cause we expect next message to be this + 1
+	for i := 0; i < len(serverTime); i++ {
+		serverTime[i] = -1 // cause we expect next message to be this + 1
 	}
 
-    // Make state
-    server_state := types.ServerState{
-        id, // Server ID
-		serverLog, // Empty message log
-		serverTime, // Vector time initialized to 0
-    }
+	// Make state
+	serverState := types.ServerState{
+		Id:        id,         // Server ID
+		LocalLog:  &serverLog, // Empty message log
+		GlobalLog: &globalLog,
+		LocalTime: serverTime, // Vector time initialized to 0,
+	}
 
-	go send_message_handler(&server_state, clusterChannels, clientChannels)
-	go receive_messages(&server_state, clusterChannels)
+	go clientRequestHandler(&serverState, clusterChannels, clientChannels)
+	go clusterMessagesHandler(&serverState, clusterChannels)
 }
 
-func send_message_handler(server_state *types.ServerState, com_chans *ClusterChannels, clientChannel *ClientChannel){
+func clientRequestHandler(serverState *types.ServerState, clusterChannels *ClusterChannels, clientChannel *ClientChannel) {
 	for {
 		select {
 		case request := <-*clientChannel:
 			messages := make([]types.Message, 0)
 			for _, messageBody := range request.MessageBodies {
-				server_state.LocalTime[server_state.Id]++
-				message := types.Message {
-					types.RegularM,
-					messageBody,
-					server_state.Id,
-					server_state.LocalTime[server_state.Id],
+				serverState.LocalTime[serverState.Id]++
+				message := types.Message{
+					Type:      types.RegularM,
+					Body:      messageBody,
+					Sender:    serverState.Id,
+					Timestamp: serverState.LocalTime[serverState.Id],
 				}
 				messages = append(messages, message)
-				server_state.MessageLog = append(server_state.MessageLog, message.Body)
+				*serverState.LocalLog = append(*serverState.LocalLog, message.Body)
 			}
 
 			if request.OutOfOrder {
-				shuffle_message(messages)
+				shuffleMessage(messages)
 			}
 			for _, message := range messages {
-				broadcastMessage(server_state.Id, com_chans, message)
+				logger.Println(ServerFlag, serverState.Id, "broadcasting", message)
+				broadcastMessage(serverState.Id, clusterChannels, message)
 			}
 		}
 	}
 }
 
 // message handler for given server
-func receive_messages(server_state *types.ServerState, com_chans *ClusterChannels,) {
+func clusterMessagesHandler(serverState *types.ServerState, clusterChannels *ClusterChannels, ) {
+	messageQueue := make([]types.Message, 0)
+
+	go func() { //load messages into the queue
+		for {
+			select {
+			case message := <-clusterChannels[serverState.Id]:
+				logger.Println(ServerFlag, serverState.Id, "received", message)
+				messageQueue = append(messageQueue, message)
+			}
+		}
+	}()
+
+	go processMessageQueue(serverState, clusterChannels, &messageQueue)
+}
+
+func processMessageQueue(serverState *types.ServerState, clusterChannels *ClusterChannels, queue *[]types.Message) {
+
 	for {
-		select {
-		case message := <-com_chans[server_state.Id]:
-			logger.Println(ServerFlag, "Server ", server_state.Id, "received message: ", message)
-
+		if len(*queue) > 0 {
+			message := (*queue)[0]
 			if message.Type == types.RegularM {
-				expectedMessageTime := server_state.LocalTime[message.Sender] + 1
-				messageTime := message.Timestamp
-				if messageTime > expectedMessageTime {
+				expectedMessageTime := serverState.LocalTime[message.Sender] + 1
+
+				if message.Timestamp == expectedMessageTime { // message as expected, update local time and save to log
+					serverState.LocalTime[message.Sender] = message.Timestamp
+					*serverState.GlobalLog = append(*serverState.GlobalLog, message.Body)
+					logger.Println(serverState.Id, "global message log", *serverState.GlobalLog)
+				} else if message.Timestamp > expectedMessageTime {
 					resendMessage := types.Message{
-						types.ResendM,
-						"",
-						server_state.Id,
-						expectedMessageTime,
+						Type:      types.ResendM,
+						Sender:    serverState.Id,
+						Timestamp: expectedMessageTime,
 					}
-					com_chans[message.Sender] <- resendMessage
-					for messageTime != expectedMessageTime {
-						newMessage := <- com_chans[server_state.Id]
-						logger.Println(ServerFlag, "Server ", server_state.Id, "received message: ", newMessage)
-						if message.Sender == newMessage.Sender &&
-							expectedMessageTime == newMessage.Timestamp {
-							expectedMessageTime = newMessage.Timestamp + 1 // exit is all caught up
-							server_state.LocalTime[message.Sender] = newMessage.Timestamp
-							logger.Println(ServerFlag, "Server ", server_state.Id, " fixed ", newMessage)
-						}
-					}
-					server_state.LocalTime[message.Sender] = message.Timestamp
+					clusterChannels[message.Sender] <- resendMessage
+					*queue = append(*queue, message) //queue to process when our clock is caught up.
 
-				} else if messageTime == expectedMessageTime { // message as expected, update local time and save to log
-					server_state.LocalTime[message.Sender] = message.Timestamp
-				} //ignore broadcasts messages for resends
-
+					logger.Println(ServerFlag, serverState.Id, "requested", resendMessage)
+				}
 			} else if message.Type == types.ResendM {
-				if message.Timestamp < 0 || message.Timestamp >= len(server_state.MessageLog) {
+				if message.Timestamp < 0 || message.Timestamp >= len(*serverState.LocalLog) {
 					log.Fatal("Invalid timestamp requested:", message.Timestamp)
 				}
 				messageTime := message.Timestamp
-				requestedMessage := types.Message {
-					types.RegularM,
-					server_state.MessageLog[messageTime],
-					server_state.Id,
-					messageTime,
+				requestedMessage := types.Message{
+					Type:      types.RegularM,
+					Body:      (*serverState.LocalLog)[messageTime],
+					Sender:    serverState.Id,
+					Timestamp: messageTime,
 				}
-				com_chans[message.Sender] <- requestedMessage
+				clusterChannels[message.Sender] <- requestedMessage
+				logger.Println(ServerFlag, serverState.Id, "resent", requestedMessage)
 			}
+			*queue = (*queue)[1:]
 		}
+		time.Sleep(time.Millisecond * 100)
 	}
 }
