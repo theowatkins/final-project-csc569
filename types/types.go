@@ -21,20 +21,19 @@ type Message struct {
 
 	// REGULAR: Timestamp of the text associated with the message
 	// RESEND: Timestamp of the message being requested
-	Timestamp int
+	Timestamp [CLUSTER_SIZE]int
 }
 
 
 type ServerState struct {
 	Id        int
-	LocalLog  * []string
+	LocalLog  * []Message
 	GlobalLog * []string
 	LocalTime [CLUSTER_SIZE]int
 
 }
 
 type ClientMessageRequest struct {
-	ReceiverId int
 	MessageBodies []string
 	OutOfOrder bool
 }

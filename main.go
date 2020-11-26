@@ -1,11 +1,10 @@
 package main
 
 import (
-	"../final/helper"
-	"../final/types"
+	"./helper"
+	"./types"
 	"fmt"
 	"log"
-	"math/rand"
 	"os"
 	"time"
 )
@@ -18,9 +17,6 @@ type ClusterChannels = [CLUSTER_SIZE]MessageChannel
 type ClientChannel = chan types.ClientMessageRequest
 type ClientChannels = [CLUSTER_SIZE]ClientChannel
 
-// early todos:
-//  - How are we going to do client communication? (who's sending messages)
-//  - What do we do with a message when it's processed?
 var running bool
 var logger *log.Logger
 
@@ -31,17 +27,15 @@ func main() {
 	running = true
 	for running {
 		logger.Println("Welcome to message sender.")
-		senderId := helper.ReadInt("Send Id:")
-		receiverId := helper.ReadInt("Receiver Id:")
+		senderId := helper.ReadInt("Send Id: ")
 		numberOfMessage := helper.ReadInt("Number of messages: ")
 		messageBodies := make([]string, 0)
 		for i := 0; i < numberOfMessage; i++ {
 			messageBody := helper.ReadString(fmt.Sprintf("Body %d body: ", i))
 			messageBodies = append(messageBodies, messageBody)
 		}
-		sendOutOfOrder := helper.ReadBool("Send out of order (true | false):")
+		sendOutOfOrder := false
 		request := types.ClientMessageRequest{
-			ReceiverId:    receiverId,
 			MessageBodies: messageBodies,
 			OutOfOrder:    sendOutOfOrder,
 		}
@@ -56,11 +50,6 @@ func broadcastMessage(senderId int, channels *ClusterChannels, message types.Mes
 			channel <- message
 		}
 	}
-}
-
-func shuffleMessage(messages []types.Message) {
-	rand.Seed(time.Now().UnixNano())
-	rand.Shuffle(len(messages), func(i, j int) { messages[i], messages[j] = messages[j], messages[i] })
 }
 
 func initCluster() ClientChannels {
@@ -78,12 +67,8 @@ func initCluster() ClientChannels {
 
 func startServer(id int, clusterChannels *ClusterChannels, clientChannels *ClientChannel) {
 	var serverTime [CLUSTER_SIZE]int
-	serverLog := make([]string, 0)
+	serverLog := make([]types.Message, 0)
 	globalLog := make([]string, 0)
-
-	for i := 0; i < len(serverTime); i++ {
-		serverTime[i] = -1 // cause we expect next message to be this + 1
-	}
 
 	// Make state
 	serverState := types.ServerState{
@@ -108,16 +93,13 @@ func clientRequestHandler(serverState *types.ServerState, clusterChannels *Clust
 					Type:      types.RegularM,
 					Body:      messageBody,
 					Sender:    serverState.Id,
-					Timestamp: serverState.LocalTime[serverState.Id],
+					Timestamp: serverState.LocalTime,
 				}
 				messages = append(messages, message)
-				*serverState.LocalLog = append(*serverState.LocalLog, message.Body)
+				*serverState.LocalLog = append(*serverState.LocalLog, message)
 			}
 
-			if request.OutOfOrder {
-				shuffleMessage(messages)
-			}
-			for _, message := range messages {
+			for _, message := range messages {		
 				logger.Println(ServerFlag, serverState.Id, "broadcasting", message)
 				broadcastMessage(serverState.Id, clusterChannels, message)
 			}
@@ -143,44 +125,51 @@ func clusterMessagesHandler(serverState *types.ServerState, clusterChannels *Clu
 }
 
 func processMessageQueue(serverState *types.ServerState, clusterChannels *ClusterChannels, messageQueue *[]types.Message) {
-
 	for {
 		if len(*messageQueue) > 0 {
 			message := (*messageQueue)[0]
 			if message.Type == types.RegularM {
-				expectedMessageTime := serverState.LocalTime[message.Sender] + 1
+				expectedMessageTime := getTime(serverState.LocalTime) + 1
+				messageTime := getTime(message.Timestamp)
 
-				if message.Timestamp == expectedMessageTime { // message as expected, update local time and save to log
-					serverState.LocalTime[message.Sender] = message.Timestamp
+				if messageTime == expectedMessageTime { // message as expected, update local time and save to log
+					serverState.LocalTime[message.Sender] = message.Timestamp[message.Sender]
 					*serverState.GlobalLog = append(*serverState.GlobalLog, message.Body)
 					logger.Println(serverState.Id, "global message log", *serverState.GlobalLog)
-				} else if message.Timestamp > expectedMessageTime {
+				} else if messageTime > expectedMessageTime {
 					resendMessage := types.Message{
 						Type:      types.ResendM,
 						Sender:    serverState.Id,
-						Timestamp: expectedMessageTime,
+						Timestamp: serverState.LocalTime,
 					}
-					clusterChannels[message.Sender] <- resendMessage
+					broadcastMessage(serverState.Id, clusterChannels, resendMessage)
 					*messageQueue = append(*messageQueue, message) //messageQueue to process when our clock is caught up.
 
 					logger.Println(ServerFlag, serverState.Id, "requested", resendMessage)
 				}
 			} else if message.Type == types.ResendM {
-				if message.Timestamp < 0 || message.Timestamp >= len(*serverState.LocalLog) {
-					log.Fatal("Invalid timestamp requested:", message.Timestamp)
+				requestedTime := getTime(message.Timestamp) + 1
+
+				for _, m := range *serverState.LocalLog {
+					if getTime(m.Timestamp) == requestedTime {
+						broadcastMessage(serverState.Id, clusterChannels, m)
+						logger.Println(ServerFlag, serverState.Id, "resent", m)
+						break
+					}
 				}
-				messageTime := message.Timestamp
-				requestedMessage := types.Message{
-					Type:      types.RegularM,
-					Body:      (*serverState.LocalLog)[messageTime],
-					Sender:    serverState.Id,
-					Timestamp: messageTime,
-				}
-				clusterChannels[message.Sender] <- requestedMessage
-				logger.Println(ServerFlag, serverState.Id, "resent", requestedMessage)
 			}
 			*messageQueue = (*messageQueue)[1:]
 		}
 		time.Sleep(time.Millisecond * 100)
 	}
+}
+
+func getTime(t [CLUSTER_SIZE]int)int {
+	time := 0
+
+	for i:=0;i<CLUSTER_SIZE;i++ {
+		time += t[i]
+	}
+
+	return time
 }
