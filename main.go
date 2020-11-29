@@ -99,7 +99,7 @@ func clientRequestHandler(serverState *types.ServerState, clusterChannels *Clust
 				*serverState.LocalLog = append(*serverState.LocalLog, message)
 			}
 
-			for _, message := range messages {		
+			for _, message := range messages {
 				logger.Println(ServerFlag, serverState.Id, "broadcasting", message)
 				broadcastMessage(serverState.Id, clusterChannels, message)
 			}
@@ -137,6 +137,10 @@ func processMessageQueue(serverState *types.ServerState, clusterChannels *Cluste
 					*serverState.GlobalLog = append(*serverState.GlobalLog, message.Body)
 					logger.Println(serverState.Id, "global message log", *serverState.GlobalLog)
 				} else if messageTime > expectedMessageTime {
+					//avoid resend is wanted message is later in the queue
+					if containsMessageWithId(messageQueue, message.Sender, expectedMessageTime) {
+						continue
+					}
 					resendMessage := types.Message{
 						Type:      types.ResendM,
 						Sender:    serverState.Id,
@@ -164,10 +168,19 @@ func processMessageQueue(serverState *types.ServerState, clusterChannels *Cluste
 	}
 }
 
-func getTime(t [CLUSTER_SIZE]int)int {
+func containsMessageWithId(messageQueue *[]types.Message, memberId int, messageId int) bool {
+	for _, message := range *messageQueue {
+		if message.Sender == memberId && message.Timestamp[message.Sender] == messageId {
+			return true
+		}
+	}
+	return false
+}
+
+func getTime(t [CLUSTER_SIZE]int) int {
 	time := 0
 
-	for i:=0;i<CLUSTER_SIZE;i++ {
+	for i := 0; i < CLUSTER_SIZE; i++ {
 		time += t[i]
 	}
 
