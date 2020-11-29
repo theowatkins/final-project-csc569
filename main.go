@@ -129,16 +129,16 @@ func processMessageQueue(serverState *types.ServerState, clusterChannels *Cluste
 		if len(*messageQueue) > 0 {
 			message := (*messageQueue)[0]
 			if message.Type == types.RegularM {
-				expectedMessageTime := getTime(serverState.LocalTime) + 1
-				messageTime := getTime(message.Timestamp)
+				expectedMessageTime := getTime(serverState.LocalTime, serverState.Id) + 1
+				messageTime := getTime(message.Timestamp, serverState.Id)
 
 				if messageTime == expectedMessageTime { // message as expected, update local time and save to log
 					serverState.LocalTime[message.Sender] = message.Timestamp[message.Sender]
 					*serverState.GlobalLog = append(*serverState.GlobalLog, message.Body)
 					logger.Println(serverState.Id, "global message log", *serverState.GlobalLog)
 				} else if messageTime > expectedMessageTime {
-					//avoid resend is wanted message is later in the queue
-					if containsMessageWithId(messageQueue, message.Sender, expectedMessageTime) {
+					//avoid resend if wanted message is later in the queue
+					if containsMessageWithId(messageQueue, serverState.Id, expectedMessageTime) {
 						continue
 					}
 					resendMessage := types.Message{
@@ -152,10 +152,10 @@ func processMessageQueue(serverState *types.ServerState, clusterChannels *Cluste
 					logger.Println(ServerFlag, serverState.Id, "requested", resendMessage)
 				}
 			} else if message.Type == types.ResendM {
-				requestedTime := getTime(message.Timestamp) + 1
+				requestedTime := getTime(message.Timestamp, serverState.Id) + 1
 
 				for _, m := range *serverState.LocalLog {
-					if getTime(m.Timestamp) == requestedTime {
+					if getTime(m.Timestamp, serverState.Id) == requestedTime {
 						broadcastMessage(serverState.Id, clusterChannels, m)
 						logger.Println(ServerFlag, serverState.Id, "resent", m)
 						break
@@ -168,20 +168,22 @@ func processMessageQueue(serverState *types.ServerState, clusterChannels *Cluste
 	}
 }
 
-func containsMessageWithId(messageQueue *[]types.Message, memberId int, messageId int) bool {
+func containsMessageWithId(messageQueue *[]types.Message, callerId int, messageTime int) bool {
 	for _, message := range *messageQueue {
-		if message.Sender == memberId && message.Timestamp[message.Sender] == messageId {
+		if getTime(message.Timestamp, callerId) == messageTime {
 			return true
 		}
 	}
 	return false
 }
 
-func getTime(t [CLUSTER_SIZE]int) int {
+func getTime(t [CLUSTER_SIZE]int, ignoreId int) int {
 	time := 0
 
 	for i := 0; i < CLUSTER_SIZE; i++ {
-		time += t[i]
+		if i != ignoreId {
+			time += t[i]
+		}
 	}
 
 	return time
