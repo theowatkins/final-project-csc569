@@ -27,19 +27,20 @@ func main() {
 	running = true
 	for running {
 		logger.Println("Welcome to message sender.")
-		senderId := helper.ReadInt("Send Id: ")
 		numberOfMessage := helper.ReadInt("Number of messages: ")
 		messageBodies := make([]string, 0)
+		messageSenders := make([]int, 0)
 		for i := 0; i < numberOfMessage; i++ {
-			messageBody := helper.ReadString(fmt.Sprintf("Body %d body: ", i))
+			senderId := helper.ReadInt(fmt.Sprintf("Message %d sender Id: ", i))
+			messageBody := helper.ReadString(fmt.Sprintf("Message %d body: ", i))
 			messageBodies = append(messageBodies, messageBody)
+			messageSenders = append(messageSenders, senderId)
 		}
-		sendOutOfOrder := false
-		request := types.ClientMessageRequest{
-			MessageBodies: messageBodies,
-			OutOfOrder:    sendOutOfOrder,
-		}
-		clientChannels[senderId] <- request
+		
+		for i := 0; i < numberOfMessage; i++ {
+			request := types.ClientMessageRequest{messageBodies[i]}
+			clientChannels[messageSenders[i]] <- request
+		} 
 		time.Sleep(10 * time.Second)
 	}
 }
@@ -86,23 +87,20 @@ func clientRequestHandler(serverState *types.ServerState, clusterChannels *Clust
 	for {
 		select {
 		case request := <-*clientChannel:
-			messages := make([]types.Message, 0)
-			for _, messageBody := range request.MessageBodies {
-				serverState.LocalTime[serverState.Id]++
-				message := types.Message{
-					Type:      types.RegularM,
-					Body:      messageBody,
-					Sender:    serverState.Id,
-					Timestamp: serverState.LocalTime,
-				}
-				messages = append(messages, message)
-				*serverState.LocalLog = append(*serverState.LocalLog, message)
+			serverState.LocalTime[serverState.Id]++
+			message := types.Message{
+				Type:      types.RegularM,
+				Body:      request.MessageBody,
+				Sender:    serverState.Id,
+				Timestamp: serverState.LocalTime,
 			}
 
-			for _, message := range messages {
-				logger.Println(ServerFlag, serverState.Id, "broadcasting", message)
-				broadcastMessage(serverState.Id, clusterChannels, message)
-			}
+			*serverState.LocalLog = append(*serverState.LocalLog, message)
+			*serverState.GlobalLog = append(*serverState.GlobalLog, message.Body)
+			logger.Println(serverState.Id, "global message log", *serverState.GlobalLog)
+
+			logger.Println(ServerFlag, serverState.Id, "broadcasting", message)
+			broadcastMessage(serverState.Id, clusterChannels, message)
 		}
 	}
 }
@@ -131,8 +129,9 @@ func processMessageQueue(serverState *types.ServerState, clusterChannels *Cluste
 			if message.Type == types.RegularM {
 				expectedMessageTime := getTime(serverState.LocalTime, serverState.Id) + 1
 				messageTime := getTime(message.Timestamp, serverState.Id)
+				missingFromSender := (serverState.LocalTime[message.Sender] < message.Timestamp[message.Sender] - 1)
 
-				if messageTime == expectedMessageTime { // message as expected, update local time and save to log
+				if messageTime == expectedMessageTime  &&  !missingFromSender{ // message as expected, update local time and save to log
 					serverState.LocalTime[message.Sender] = message.Timestamp[message.Sender]
 					*serverState.GlobalLog = append(*serverState.GlobalLog, message.Body)
 					logger.Println(serverState.Id, "global message log", *serverState.GlobalLog)

@@ -34,6 +34,5 @@ type ServerState struct {
 }
 
 type ClientMessageRequest struct {
-	MessageBodies []string
-	OutOfOrder bool
+	MessageBody string
 }
