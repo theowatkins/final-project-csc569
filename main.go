@@ -128,7 +128,7 @@ func clientRequestHandler(serverState *types.ServerState, clusterChannels *Clust
 
 			for _, message := range messages {
 				broadcastMessage(serverState.Id, clusterChannels, message)
-				time.Sleep(1 * time.Second)
+				//time.Sleep(100 * time.Millisecond)
 			}
 		}
 	}
@@ -157,12 +157,16 @@ func processMessageQueue(serverState *types.ServerState, clusterChannels *Cluste
 			message := (*messageQueue)[0]
 			if message.Type == types.RegularM {
 				resendIds := getResendIds(message.Sender, serverState.Id, serverState.LocalTime, message.Timestamp)
+				lt := getTime2(serverState.LocalTime, serverState.Id)
+				mt := getTime2(message.Timestamp, serverState.Id)
 
-				if len(resendIds) == 0 && !vecEquals(serverState.LocalTime, message.Timestamp) { // message as expected, update local time and save to log
-					serverState.LocalTime[message.Sender] = message.Timestamp[message.Sender]
-					logger.Println(serverState.Id, "'s local time: ", serverState.LocalTime)
-					*serverState.GlobalLog = addToGlobalLog(serverState.GlobalLog, message)
-					logger.Println(serverState.Id, "global message log", *serverState.GlobalLog)
+				if len(resendIds) == 0 { // no resends needed
+					if mt > lt { //ignore stale messages
+						serverState.LocalTime[message.Sender] = message.Timestamp[message.Sender]
+						logger.Println(serverState.Id, "'s local time: ", serverState.LocalTime)
+						*serverState.GlobalLog = addToGlobalLog(serverState.GlobalLog, message)
+						logger.Println(serverState.Id, "global message log", *serverState.GlobalLog)
+					}
 				} else  {
 					resendMessage := types.Message{
 						Type:      types.ResendM,
@@ -188,7 +192,7 @@ func processMessageQueue(serverState *types.ServerState, clusterChannels *Cluste
 			}
 			*messageQueue = (*messageQueue)[1:]
 		}
-		time.Sleep(time.Millisecond * 100)
+		//time.Sleep(time.Millisecond * 100)
 	}
 }
 
@@ -245,6 +249,18 @@ func getTime(t [CLUSTER_SIZE]int) int {
 
 	for i := 0; i < CLUSTER_SIZE; i++ {
 		time += t[i]
+	}
+
+	return time
+}
+
+func getTime2(t [CLUSTER_SIZE]int, exclude int) int {
+	time := 0
+
+	for i := 0; i < CLUSTER_SIZE; i++ {
+		if i!=exclude {
+			time += t[i]
+		}
 	}
 
 	return time
