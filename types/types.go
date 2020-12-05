@@ -28,7 +28,7 @@ type Message struct {
 type ServerState struct {
 	Id        int
 	LocalLog  * []Message
-	GlobalLog * []string
+	GlobalLog * []Message
 	LocalTime [CLUSTER_SIZE]int
 
 }

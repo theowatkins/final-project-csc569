@@ -69,7 +69,7 @@ func initCluster() ClientChannels {
 func startServer(id int, clusterChannels *ClusterChannels, clientChannels *ClientChannel) {
 	var serverTime [CLUSTER_SIZE]int
 	serverLog := make([]types.Message, 0)
-	globalLog := make([]string, 0)
+	globalLog := make([]types.Message, 0)
 
 	// Make state
 	serverState := types.ServerState{
@@ -96,7 +96,7 @@ func clientRequestHandler(serverState *types.ServerState, clusterChannels *Clust
 			}
 
 			*serverState.LocalLog = append(*serverState.LocalLog, message)
-			*serverState.GlobalLog = append(*serverState.GlobalLog, message.Body)
+			*serverState.GlobalLog = addToGlobalLog(serverState.GlobalLog, message)
 			logger.Println(serverState.Id, "global message log", *serverState.GlobalLog)
 
 			logger.Println(ServerFlag, serverState.Id, "broadcasting", message)
@@ -127,35 +127,30 @@ func processMessageQueue(serverState *types.ServerState, clusterChannels *Cluste
 		if len(*messageQueue) > 0 {
 			message := (*messageQueue)[0]
 			if message.Type == types.RegularM {
-				expectedMessageTime := getTime(serverState.LocalTime, serverState.Id) + 1
-				messageTime := getTime(message.Timestamp, serverState.Id)
-				missingFromSender := (serverState.LocalTime[message.Sender] < message.Timestamp[message.Sender] - 1)
+				resendIds := getResendIds(message.Sender, serverState.Id, serverState.LocalTime, message.Timestamp)
 
-				if messageTime == expectedMessageTime  &&  !missingFromSender{ // message as expected, update local time and save to log
+				if len(resendIds) == 0 { // message as expected, update local time and save to log
 					serverState.LocalTime[message.Sender] = message.Timestamp[message.Sender]
-					*serverState.GlobalLog = append(*serverState.GlobalLog, message.Body)
+					*serverState.GlobalLog = addToGlobalLog(serverState.GlobalLog, message)
 					logger.Println(serverState.Id, "global message log", *serverState.GlobalLog)
-				} else if messageTime > expectedMessageTime {
-					//avoid resend if wanted message is later in the queue
-					if containsMessageWithId(messageQueue, serverState.Id, expectedMessageTime) {
-						continue
-					}
+				} else {
 					resendMessage := types.Message{
 						Type:      types.ResendM,
 						Sender:    serverState.Id,
 						Timestamp: serverState.LocalTime,
 					}
-					broadcastMessage(serverState.Id, clusterChannels, resendMessage)
+					for _, id := range resendIds {
+						clusterChannels[id] <- resendMessage
+						logger.Println(ServerFlag, serverState.Id, "requested", resendMessage, " from ", id)
+					}
 					*messageQueue = append(*messageQueue, message) //messageQueue to process when our clock is caught up.
-
-					logger.Println(ServerFlag, serverState.Id, "requested", resendMessage)
 				}
 			} else if message.Type == types.ResendM {
-				requestedTime := getTime(message.Timestamp, serverState.Id) + 1
+				requestedTime := message.Timestamp[serverState.Id] + 1
 
 				for _, m := range *serverState.LocalLog {
-					if getTime(m.Timestamp, serverState.Id) == requestedTime {
-						broadcastMessage(serverState.Id, clusterChannels, m)
+					if m.Timestamp[serverState.Id] == requestedTime {
+						clusterChannels[message.Sender] <- m
 						logger.Println(ServerFlag, serverState.Id, "resent", m)
 						break
 					}
@@ -169,20 +164,60 @@ func processMessageQueue(serverState *types.ServerState, clusterChannels *Cluste
 
 func containsMessageWithId(messageQueue *[]types.Message, callerId int, messageTime int) bool {
 	for _, message := range *messageQueue {
-		if getTime(message.Timestamp, callerId) == messageTime {
+		if getTime(message.Timestamp) == messageTime {
 			return true
 		}
 	}
 	return false
 }
 
-func getTime(t [CLUSTER_SIZE]int, ignoreId int) int {
+func getResendIds(sender int, receiver int, localTime [CLUSTER_SIZE]int, timestamp [CLUSTER_SIZE]int) []int {
+	resendIds := make([]int, 0)
+
+	for id, t := range localTime {
+		if id != receiver && t < timestamp[id] {
+			if id == sender && t < timestamp[id] - 1 {
+				resendIds = append(resendIds, id)
+			} else if id != sender && t < timestamp[id] {
+				resendIds = append(resendIds, id)
+			}
+		}
+	}
+
+	return resendIds
+}
+
+func addToGlobalLog(globalLog *[]types.Message, message types.Message) []types.Message{
+	log := *globalLog
+
+	if len(log) == 0 {
+		log = append(log, message)
+		return log
+	} else {
+		for i := len(log)-1; i >= 0; i-- {
+			entry := log[i]
+			if getTime(entry.Timestamp) <= getTime(message.Timestamp) {
+				if len(log) == i {
+					fmt.Println(log)
+					log = append(log, message)
+					return log
+				} else {
+					log = append(log[:i+1], log[i:]...)
+					log[i] = message
+					return log
+				}
+			}
+		}
+	
+		return log
+	}
+}
+
+func getTime(t [CLUSTER_SIZE]int) int {
 	time := 0
 
 	for i := 0; i < CLUSTER_SIZE; i++ {
-		if i != ignoreId {
-			time += t[i]
-		}
+		time += t[i]
 	}
 
 	return time
