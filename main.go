@@ -105,9 +105,9 @@ func clientRequestHandler(serverState *types.ServerState, clusterChannels *Clust
 	for {
 		select {
 		case request := <-*clientChannel:
-			serverState.LocalTime[serverState.Id]++
 			messages := make([]types.Message, 0)
 			for _, messageBody := range request.MessageBodies {
+				serverState.LocalTime[serverState.Id]++
 				message := types.Message{
 					Type:      types.RegularM,
 					Body:      messageBody,
@@ -128,6 +128,7 @@ func clientRequestHandler(serverState *types.ServerState, clusterChannels *Clust
 
 			for _, message := range messages {
 				broadcastMessage(serverState.Id, clusterChannels, message)
+				time.Sleep(1 * time.Second)
 			}
 		}
 	}
@@ -157,11 +158,12 @@ func processMessageQueue(serverState *types.ServerState, clusterChannels *Cluste
 			if message.Type == types.RegularM {
 				resendIds := getResendIds(message.Sender, serverState.Id, serverState.LocalTime, message.Timestamp)
 
-				if len(resendIds) == 0 { // message as expected, update local time and save to log
+				if len(resendIds) == 0 && !vecEquals(serverState.LocalTime, message.Timestamp) { // message as expected, update local time and save to log
 					serverState.LocalTime[message.Sender] = message.Timestamp[message.Sender]
+					logger.Println(serverState.Id, "'s local time: ", serverState.LocalTime)
 					*serverState.GlobalLog = addToGlobalLog(serverState.GlobalLog, message)
 					logger.Println(serverState.Id, "global message log", *serverState.GlobalLog)
-				} else {
+				} else  {
 					resendMessage := types.Message{
 						Type:      types.ResendM,
 						Sender:    serverState.Id,
@@ -206,6 +208,7 @@ func getResendIds(sender int, receiver int, localTime [CLUSTER_SIZE]int, timesta
 	return resendIds
 }
 
+
 func addToGlobalLog(globalLog *[]types.Message, message types.Message) []types.Message {
 	log := *globalLog
 
@@ -213,15 +216,21 @@ func addToGlobalLog(globalLog *[]types.Message, message types.Message) []types.M
 		log = append(log, message)
 		return log
 	} else {
+		for j:=0; j<len(log); j++ {
+			entry := log[j]
+			if vecEquals(entry.Timestamp, message.Timestamp) {
+				return log
+			}
+		}
 		for i := len(log) - 1; i >= 0; i-- {
 			entry := log[i]
 			if getTime(entry.Timestamp) <= getTime(message.Timestamp) {
-				if len(log) == i {
+				if len(log) - 1 == i {
 					log = append(log, message)
 					return log
 				} else {
 					log = append(log[:i+1], log[i:]...)
-					log[i] = message
+					log[i+1] = message
 					return log
 				}
 			}
@@ -239,4 +248,13 @@ func getTime(t [CLUSTER_SIZE]int) int {
 	}
 
 	return time
+}
+
+func vecEquals(one [CLUSTER_SIZE]int, two [CLUSTER_SIZE]int) bool{
+	for i:=0; i<CLUSTER_SIZE; i++ {
+		if one[i] != two[i] {
+			return false
+		}
+	}
+	return true
 }
