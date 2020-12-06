@@ -27,17 +27,17 @@ func main() {
 	clientChannels := initCluster()
 	running = true
 	for running {
-		logger.Println("Welcome to message sender. Please input all the messages and type SEND when all messages are been inputted.")
+		logger.Println("Welcome to message sender. Please input all the messages and type SEND when all messages are inputted.")
 
 		messages := make([]types.ClientMessageRequest, 0)
 
 		for true {
-			commandName := helper.ReadString("Start New Message or send messages (start/send):")
+			commandName := helper.ReadString("Start New Message or send messages (start/send): ")
 			if commandName == "send" {
 				break
 			}
-			sendOutOfOrder := helper.ReadBool("Should the messages be sent out of order?")
-			senderId := helper.ReadInt("Sender Id:")
+			sendOutOfOrder := helper.ReadBool("Send out of order?: ")
+			senderId := helper.ReadInt("Sender Id: ")
 			messageBodies := make([]string, 0)
 			for true {
 				messageBody := helper.ReadString(fmt.Sprintf("Message body (or \"done\"): "))
@@ -128,7 +128,6 @@ func clientRequestHandler(serverState *types.ServerState, clusterChannels *Clust
 
 			for _, message := range messages {
 				broadcastMessage(serverState.Id, clusterChannels, message)
-				//time.Sleep(100 * time.Millisecond)
 			}
 		}
 	}
@@ -157,13 +156,10 @@ func processMessageQueue(serverState *types.ServerState, clusterChannels *Cluste
 			message := (*messageQueue)[0]
 			if message.Type == types.RegularM {
 				resendIds := getResendIds(message.Sender, serverState.Id, serverState.LocalTime, message.Timestamp)
-				lt := getTime2(serverState.LocalTime, serverState.Id)
-				mt := getTime2(message.Timestamp, serverState.Id)
 
 				if len(resendIds) == 0 { // no resends needed
-					if mt > lt { //ignore stale messages
+					if serverState.LocalTime[message.Sender] == message.Timestamp[message.Sender] - 1 {
 						serverState.LocalTime[message.Sender] = message.Timestamp[message.Sender]
-						logger.Println(serverState.Id, "'s local time: ", serverState.LocalTime)
 						*serverState.GlobalLog = addToGlobalLog(serverState.GlobalLog, message)
 						logger.Println(serverState.Id, "global message log", *serverState.GlobalLog)
 					}
@@ -192,7 +188,6 @@ func processMessageQueue(serverState *types.ServerState, clusterChannels *Cluste
 			}
 			*messageQueue = (*messageQueue)[1:]
 		}
-		//time.Sleep(time.Millisecond * 100)
 	}
 }
 
@@ -220,12 +215,6 @@ func addToGlobalLog(globalLog *[]types.Message, message types.Message) []types.M
 		log = append(log, message)
 		return log
 	} else {
-		for j:=0; j<len(log); j++ {
-			entry := log[j]
-			if vecEquals(entry.Timestamp, message.Timestamp) {
-				return log
-			}
-		}
 		for i := len(log) - 1; i >= 0; i-- {
 			entry := log[i]
 			if getTime(entry.Timestamp) <= getTime(message.Timestamp) {
@@ -252,25 +241,4 @@ func getTime(t [CLUSTER_SIZE]int) int {
 	}
 
 	return time
-}
-
-func getTime2(t [CLUSTER_SIZE]int, exclude int) int {
-	time := 0
-
-	for i := 0; i < CLUSTER_SIZE; i++ {
-		if i!=exclude {
-			time += t[i]
-		}
-	}
-
-	return time
-}
-
-func vecEquals(one [CLUSTER_SIZE]int, two [CLUSTER_SIZE]int) bool{
-	for i:=0; i<CLUSTER_SIZE; i++ {
-		if one[i] != two[i] {
-			return false
-		}
-	}
-	return true
 }
