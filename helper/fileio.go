@@ -18,6 +18,7 @@ func ReadString(prompt string) string {
 	if cleanText == "exit" {
 		log.Fatal("exitting program...")
 	}
+
 	return cleanText
 }
 
@@ -40,5 +41,3 @@ func ReadBool(prompt string) bool {
 	}
 	return b
 }
-
-

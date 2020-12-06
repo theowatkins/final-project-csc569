@@ -1,6 +1,7 @@
 package types
 
 type MessageType string
+
 const RegularM MessageType = "REGULAR"
 const ResendM MessageType = "RESEND"
 
@@ -24,15 +25,15 @@ type Message struct {
 	Timestamp [CLUSTER_SIZE]int
 }
 
-
 type ServerState struct {
 	Id        int
-	LocalLog  * []Message
-	GlobalLog * []Message
+	LocalLog  *[]Message
+	GlobalLog *[]Message
 	LocalTime [CLUSTER_SIZE]int
-
 }
 
 type ClientMessageRequest struct {
-	MessageBody string
+	SenderId      int
+	MessageBodies []string
+	IsShuffled    bool
 }

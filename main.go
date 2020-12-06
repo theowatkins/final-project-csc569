@@ -5,6 +5,7 @@ import (
 	"./types"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"time"
 )
@@ -26,23 +27,40 @@ func main() {
 	clientChannels := initCluster()
 	running = true
 	for running {
-		logger.Println("Welcome to message sender.")
-		numberOfMessage := helper.ReadInt("Number of messages: ")
-		messageBodies := make([]string, 0)
-		messageSenders := make([]int, 0)
-		for i := 0; i < numberOfMessage; i++ {
-			senderId := helper.ReadInt(fmt.Sprintf("Message %d sender Id: ", i))
-			messageBody := helper.ReadString(fmt.Sprintf("Message %d body: ", i))
-			messageBodies = append(messageBodies, messageBody)
-			messageSenders = append(messageSenders, senderId)
+		logger.Println("Welcome to message sender. Please input all the messages and type SEND when all messages are inputted.")
+
+		messages := make([]types.ClientMessageRequest, 0)
+
+		for true {
+			commandName := helper.ReadString("Start New Message or send messages (start/send): ")
+			if commandName == "send" {
+				break
+			}
+			sendOutOfOrder := helper.ReadBool("Send out of order?: ")
+			senderId := helper.ReadInt("Sender Id: ")
+			messageBodies := make([]string, 0)
+			for true {
+				messageBody := helper.ReadString(fmt.Sprintf("Message body (or \"done\"): "))
+				if messageBody == "done" {
+					break
+				} else {
+					messageBodies = append(messageBodies, messageBody)
+				}
+			}
+			newMessage := types.ClientMessageRequest{senderId, messageBodies, sendOutOfOrder}
+			messages = append(messages, newMessage)
 		}
-		
-		for i := 0; i < numberOfMessage; i++ {
-			request := types.ClientMessageRequest{messageBodies[i]}
-			clientChannels[messageSenders[i]] <- request
-		} 
+
+		for _, request := range messages {
+			clientChannels[request.SenderId] <- request
+		}
 		time.Sleep(10 * time.Second)
 	}
+}
+
+func shuffleMessages(messages []types.Message) {
+	rand.Seed(time.Now().UnixNano())
+	rand.Shuffle(len(messages), func(i, j int) { messages[i], messages[j] = messages[j], messages[i] })
 }
 
 func broadcastMessage(senderId int, channels *ClusterChannels, message types.Message) {
@@ -87,26 +105,36 @@ func clientRequestHandler(serverState *types.ServerState, clusterChannels *Clust
 	for {
 		select {
 		case request := <-*clientChannel:
-			serverState.LocalTime[serverState.Id]++
-			message := types.Message{
-				Type:      types.RegularM,
-				Body:      request.MessageBody,
-				Sender:    serverState.Id,
-				Timestamp: serverState.LocalTime,
+			messages := make([]types.Message, 0)
+			for _, messageBody := range request.MessageBodies {
+				serverState.LocalTime[serverState.Id]++
+				message := types.Message{
+					Type:      types.RegularM,
+					Body:      messageBody,
+					Sender:    serverState.Id,
+					Timestamp: serverState.LocalTime,
+				}
+				messages = append(messages, message)
+				*serverState.LocalLog = append(*serverState.LocalLog, message)
+				*serverState.GlobalLog = addToGlobalLog(serverState.GlobalLog, message)
+				logger.Println(serverState.Id, "global message log", *serverState.GlobalLog)
+				logger.Println(ServerFlag, serverState.Id, "broadcasting", message)
 			}
 
-			*serverState.LocalLog = append(*serverState.LocalLog, message)
-			*serverState.GlobalLog = addToGlobalLog(serverState.GlobalLog, message)
-			logger.Println(serverState.Id, "global message log", *serverState.GlobalLog)
+			if request.IsShuffled {
+				shuffleMessages(messages)
+				logger.Println("Final send order:", messages)
+			}
 
-			logger.Println(ServerFlag, serverState.Id, "broadcasting", message)
-			broadcastMessage(serverState.Id, clusterChannels, message)
+			for _, message := range messages {
+				broadcastMessage(serverState.Id, clusterChannels, message)
+			}
 		}
 	}
 }
 
 // message handler for given server
-func clusterMessagesHandler(serverState *types.ServerState, clusterChannels *ClusterChannels, ) {
+func clusterMessagesHandler(serverState *types.ServerState, clusterChannels *ClusterChannels) {
 	messageQueue := make([]types.Message, 0)
 
 	go func() { //load messages into the queue
@@ -129,11 +157,13 @@ func processMessageQueue(serverState *types.ServerState, clusterChannels *Cluste
 			if message.Type == types.RegularM {
 				resendIds := getResendIds(message.Sender, serverState.Id, serverState.LocalTime, message.Timestamp)
 
-				if len(resendIds) == 0 { // message as expected, update local time and save to log
-					serverState.LocalTime[message.Sender] = message.Timestamp[message.Sender]
-					*serverState.GlobalLog = addToGlobalLog(serverState.GlobalLog, message)
-					logger.Println(serverState.Id, "global message log", *serverState.GlobalLog)
-				} else {
+				if len(resendIds) == 0 { // no resends needed
+					if serverState.LocalTime[message.Sender] == message.Timestamp[message.Sender] - 1 {
+						serverState.LocalTime[message.Sender] = message.Timestamp[message.Sender]
+						*serverState.GlobalLog = addToGlobalLog(serverState.GlobalLog, message)
+						logger.Println(serverState.Id, "global message log", *serverState.GlobalLog)
+					}
+				} else  {
 					resendMessage := types.Message{
 						Type:      types.ResendM,
 						Sender:    serverState.Id,
@@ -158,17 +188,7 @@ func processMessageQueue(serverState *types.ServerState, clusterChannels *Cluste
 			}
 			*messageQueue = (*messageQueue)[1:]
 		}
-		time.Sleep(time.Millisecond * 100)
 	}
-}
-
-func containsMessageWithId(messageQueue *[]types.Message, callerId int, messageTime int) bool {
-	for _, message := range *messageQueue {
-		if getTime(message.Timestamp) == messageTime {
-			return true
-		}
-	}
-	return false
 }
 
 func getResendIds(sender int, receiver int, localTime [CLUSTER_SIZE]int, timestamp [CLUSTER_SIZE]int) []int {
@@ -176,7 +196,7 @@ func getResendIds(sender int, receiver int, localTime [CLUSTER_SIZE]int, timesta
 
 	for id, t := range localTime {
 		if id != receiver && t < timestamp[id] {
-			if id == sender && t < timestamp[id] - 1 {
+			if id == sender && t < timestamp[id]-1 {
 				resendIds = append(resendIds, id)
 			} else if id != sender && t < timestamp[id] {
 				resendIds = append(resendIds, id)
@@ -187,28 +207,28 @@ func getResendIds(sender int, receiver int, localTime [CLUSTER_SIZE]int, timesta
 	return resendIds
 }
 
-func addToGlobalLog(globalLog *[]types.Message, message types.Message) []types.Message{
+
+func addToGlobalLog(globalLog *[]types.Message, message types.Message) []types.Message {
 	log := *globalLog
 
 	if len(log) == 0 {
 		log = append(log, message)
 		return log
 	} else {
-		for i := len(log)-1; i >= 0; i-- {
+		for i := len(log) - 1; i >= 0; i-- {
 			entry := log[i]
 			if getTime(entry.Timestamp) <= getTime(message.Timestamp) {
-				if len(log) == i {
-					fmt.Println(log)
+				if len(log) - 1 == i {
 					log = append(log, message)
 					return log
 				} else {
 					log = append(log[:i+1], log[i:]...)
-					log[i] = message
+					log[i+1] = message
 					return log
 				}
 			}
 		}
-	
+
 		return log
 	}
 }
